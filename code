@@ -1,0 +1,85 @@
+import requests
+import webbrowser
+import openpyxl
+from openpyxl.utils import get_column_letter
+
+APP_ID = ''  # Замените на ваше значение
+CLIENT_SECRET = ''  # Замените на ваш секретный ключ
+REDIRECT_URI = 'https://oauth.vk.com/blank.html'
+SCOPE = 'groups'
+VERSION = '5.131'
+GROUP_SCREEN_NAMES = ['group1', 'group2']  # Список коротких имен сообществ
+
+def get_access_token(app_id, client_secret, redirect_uri, scope):
+    auth_url = f"https://oauth.vk.com/authorize?client_id={app_id}&display=page&redirect_uri={redirect_uri}&scope={scope}&response_type=code&v={VERSION}"
+    webbrowser.open(auth_url)
+    code = input("Введите код из адресной строки после редиректа: ")
+    token_url = f"https://oauth.vk.com/access_token?client_id={app_id}&client_secret={client_secret}&redirect_uri={redirect_uri}&code={code}"
+    response = requests.get(token_url)
+    return response.json()['access_token']
+
+def get_group_id_by_screen_name(screen_name, access_token):
+    params = {
+        'group_ids': screen_name,
+        'access_token': access_token,
+        'v': VERSION
+    }
+    response = requests.get('https://api.vk.com/method/groups.getById', params=params).json()
+    if 'response' in response:
+        return response['response'][0]['id']
+    else:
+        print("Ошибка при получении ID группы:", response.get('error'))
+        return None
+
+def get_community_members(group_id, access_token):
+    members = []
+    offset = 0
+    while True:
+        params = {
+            'group_id': group_id,
+            'v': VERSION,
+            'access_token': access_token,
+            'offset': offset
+        }
+        response = requests.get('https://api.vk.com/method/groups.getMembers', params=params).json()
+        data = response.get('response', {})
+        members.extend(data.get('items', []))
+        if 'next_offset' in data:
+            offset = data['next_offset']
+        else:
+            break
+    return members
+
+def save_members_to_xlsx(members_data, file_name):
+    wb = openpyxl.Workbook()
+    first_sheet = True
+    for group_id, members in members_data.items():
+        if first_sheet:  # Используем первый лист, если это первая итерация
+            sheet = wb.active
+            sheet.title = f"Community {group_id}"
+            first_sheet = False
+        else:
+            sheet = wb.create_sheet(title=f"Community {group_id}")
+        sheet.append(['Member ID'])
+        for member_id in members:
+            sheet.append([member_id])
+    wb.save(file_name)
+
+def collect_members_from_groups(group_ids, access_token):
+    all_members = {}
+    for group_id in group_ids:
+        members = get_community_members(group_id, access_token)
+        all_members[group_id] = members
+        print(f"Найдено участников в сообществе {group_id}: {len(members)}")
+    return all_members
+
+if __name__ == '__main__':
+    access_token = get_access_token(APP_ID, CLIENT_SECRET, REDIRECT_URI, SCOPE)
+    # Получаем числовые ID сообществ по их коротким именам
+    group_ids = []
+    for name in GROUP_SCREEN_NAMES:
+        group_id = get_group_id_by_screen_name(name, access_token)
+        if group_id is not None:
+            group_ids.append(group_id)
+    members_data = collect_members_from_groups(group_ids, access_token)
+    save_members_to_xlsx(members_data, "all_communities_members.xlsx")
